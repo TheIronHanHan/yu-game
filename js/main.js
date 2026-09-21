@@ -1,6 +1,7 @@
 import { PIXEL_RATIO, SCREEN_HEIGHT, SCREEN_WIDTH } from './render';
 import Minesweeper, { DIFFICULTIES } from './games/minesweeper';
 import Game2048 from './games/game2048';
+import Sudoku from './games/sudoku';
 import TowerDefense, { TOWER_LEVEL, TOWER_TYPES } from './games/towerDefense';
 import {
   COLORS,
@@ -15,6 +16,24 @@ const ctx = canvas.getContext('2d');
 ctx.scale(PIXEL_RATIO, PIXEL_RATIO);
 ctx.imageSmoothingEnabled = true;
 const SAVE_KEY = 'miniArcadeSaveV1';
+const ARCADE_THEME = {
+  background: '#E9DFF2',
+  backgroundTop: '#F8F2FB',
+  backgroundBottom: '#E2D5EC',
+  panel: '#FFF9FF',
+  panelSoft: '#DED0E9',
+  panelStrong: '#CCB9DC',
+  text: '#382A43',
+  subtext: '#65566F',
+  muted: '#897A93',
+  primary: '#7650A8',
+  primaryDark: '#563477',
+  accent: '#C86898',
+  mint: '#468D78',
+  gold: '#B87824',
+  border: '#C6B2D5',
+  shadow: 'rgba(72,45,88,0.16)',
+};
 
 export default class Main {
   constructor() {
@@ -36,6 +55,8 @@ export default class Main {
     this.showMineLeaderboard = false;
     this.game2048 = new Game2048();
     this.game2048Animation = null;
+    this.sudoku = new Sudoku();
+    this.showSudokuResult = false;
     this.towerDefense = new TowerDefense();
     this.savedGames = this.readSaveData();
     this.lastAutoSaveAt = 0;
@@ -54,6 +75,10 @@ export default class Main {
         if (this.appHiddenAt && this.minesweeper.status === 'playing') {
           this.minesweeper.startTime = Date.now() - this.minesweeper.elapsedMilliseconds;
         }
+        if (this.appHiddenAt && this.sudoku.status === 'playing') {
+          this.sudoku.startTime = Date.now() - this.sudoku.elapsedMilliseconds;
+        }
+        if (this.sudoku.ensureDaily()) this.saveCurrentGame();
         this.appHiddenAt = 0;
       });
     }
@@ -294,6 +319,7 @@ export default class Main {
   restoreSavedGames() {
     if (this.savedGames.minesweeper) this.minesweeper.restore(this.savedGames.minesweeper);
     if (this.savedGames.game2048) this.game2048.restore(this.savedGames.game2048);
+    if (this.savedGames.sudoku) this.sudoku.restore(this.savedGames.sudoku);
     if (this.savedGames.towerDefense) this.towerDefense.restore(this.savedGames.towerDefense);
     if (this.savedGames.mineViewport) {
       this.mineViewport.offsetX = Math.max(0, Number(this.savedGames.mineViewport.offsetX) || 0);
@@ -303,14 +329,16 @@ export default class Main {
   }
 
   saveCurrentGame() {
-    if (!['minesweeper', '2048', 'towerDefense'].includes(this.screen)) return;
+    if (!['minesweeper', '2048', 'sudoku', 'towerDefense'].includes(this.screen)) return;
     if (this.screen === 'minesweeper') this.minesweeper.updateTimer();
+    if (this.screen === 'sudoku') this.sudoku.updateTimer();
     this.savedGames = {
-      version: 1,
+      version: 2,
       lastGame: this.screen,
       minesweeper: this.minesweeper.serialize(),
       mineViewport: { ...this.mineViewport },
       game2048: this.game2048.serialize(),
+      sudoku: this.sudoku.serialize(),
       towerDefense: this.towerDefense.serialize(),
     };
     wx.setStorageSync(SAVE_KEY, this.savedGames);
@@ -334,6 +362,14 @@ export default class Main {
         detail: `${this.game2048.score} 分`,
       };
     }
+    if (this.savedGames.lastGame === 'sudoku'
+      && (this.sudoku.status === 'ready' || this.sudoku.status === 'playing')) {
+      return {
+        screen: 'sudoku',
+        title: '继续每日数独 · 困难',
+        detail: `${this.sudoku.filledCount}/81`,
+      };
+    }
     if (this.savedGames.lastGame === 'towerDefense'
       && (this.towerDefense.status === 'ready' || this.towerDefense.status === 'playing')) {
       return {
@@ -353,6 +389,9 @@ export default class Main {
         if (resumeInfo.screen === 'minesweeper' && this.minesweeper.status === 'playing') {
           this.minesweeper.startTime = Date.now() - this.minesweeper.elapsedMilliseconds;
         }
+        if (resumeInfo.screen === 'sudoku' && this.sudoku.status === 'playing') {
+          this.sudoku.startTime = Date.now() - this.sudoku.elapsedMilliseconds;
+        }
         this.clearMineEffects();
       } else if (this.contains(this.hitAreas.minesweeperCard, x, y)) {
         this.screen = 'minesweeper';
@@ -368,6 +407,14 @@ export default class Main {
         this.saveCurrentGame();
       } else if (this.contains(this.hitAreas.towerDefenseCard, x, y)) {
         this.screen = 'towerMap';
+      } else if (this.contains(this.hitAreas.sudokuCard, x, y)) {
+        this.sudoku.ensureDaily();
+        this.screen = 'sudoku';
+        if (this.sudoku.status === 'playing') {
+          this.sudoku.startTime = Date.now() - this.sudoku.elapsedMilliseconds;
+        }
+        this.showSudokuResult = false;
+        this.saveCurrentGame();
       }
       return;
     }
@@ -384,6 +431,7 @@ export default class Main {
       this.clearMineEffects();
       this.showMineLeaderboard = false;
       this.game2048Animation = null;
+      this.showSudokuResult = false;
       this.screen = this.screen === 'towerDefense' ? 'towerMap' : 'home';
       return;
     }
@@ -411,6 +459,11 @@ export default class Main {
         this.game2048Animation = null;
         this.saveCurrentGame();
       }
+      if (this.screen === 'sudoku') {
+        this.sudoku.reset();
+        this.showSudokuResult = false;
+        this.saveCurrentGame();
+      }
       if (this.screen === 'towerDefense') {
         this.towerDefense.reset();
         this.saveCurrentGame();
@@ -430,6 +483,11 @@ export default class Main {
 
     if (this.screen === 'towerDefense') {
       this.handleTowerDefenseTap(x, y);
+      return;
+    }
+
+    if (this.screen === 'sudoku') {
+      this.handleSudokuTap(x, y);
       return;
     }
 
@@ -478,6 +536,47 @@ export default class Main {
 
     const cell = this.getTouchedCell(x, y);
     if (cell) this.triggerMineReveal(cell.row, cell.col);
+  }
+
+  handleSudokuTap(x, y) {
+    if (this.showSudokuResult) {
+      if (this.contains(this.hitAreas.sudokuOverlayAction, x, y)) {
+        this.showSudokuResult = false;
+      }
+      return;
+    }
+
+    if (this.contains(this.hitAreas.sudokuBoard, x, y)) {
+      const board = this.hitAreas.sudokuBoard;
+      const cellSize = board.width / 9;
+      const row = Math.floor((y - board.y) / cellSize);
+      const col = Math.floor((x - board.x) / cellSize);
+      this.sudoku.select(row, col);
+      return;
+    }
+
+    if (this.contains(this.hitAreas.sudokuNotes, x, y)) {
+      this.sudoku.notesMode = !this.sudoku.notesMode;
+      this.saveCurrentGame();
+      return;
+    }
+
+    if (this.contains(this.hitAreas.sudokuErase, x, y)) {
+      if (this.sudoku.erase()) this.saveCurrentGame();
+      return;
+    }
+
+    const number = Array.from({ length: 9 }, (_, index) => index + 1).find((value) => (
+      this.contains(this.hitAreas[`sudokuNumber_${value}`], x, y)
+    ));
+    if (!number) return;
+    const previousStatus = this.sudoku.status;
+    if (this.sudoku.input(number)) {
+      if (previousStatus !== 'won' && this.sudoku.status === 'won') {
+        this.showSudokuResult = true;
+      }
+      this.saveCurrentGame();
+    }
   }
 
   getTouchedCell(x, y) {
@@ -559,19 +658,41 @@ export default class Main {
     ctx.globalAlpha = 1;
   }
 
+  getPageTop(minimum = 48) {
+    return Math.max(minimum, GameGlobal.menuButtonBottom + 30);
+  }
+
+  drawArcadeBackground() {
+    const gradient = ctx.createLinearGradient(0, 0, 0, SCREEN_HEIGHT);
+    gradient.addColorStop(0, ARCADE_THEME.backgroundTop);
+    gradient.addColorStop(0.48, ARCADE_THEME.background);
+    gradient.addColorStop(1, ARCADE_THEME.backgroundBottom);
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+    ctx.fillStyle = 'rgba(255,255,255,0.42)';
+    ctx.beginPath();
+    ctx.arc(SCREEN_WIDTH - 26, 88, 118, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(154,112,178,0.1)';
+    ctx.beginPath();
+    ctx.arc(-32, SCREEN_HEIGHT - 74, 112, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   renderHome() {
-    this.drawBackground();
+    this.drawArcadeBackground();
     this.hitAreas = {};
 
     const width = SCREEN_WIDTH;
     const side = 24;
-    const top = Math.max(54, GameGlobal.safeArea.top + 26);
+    const top = this.getPageTop(54);
 
-    ctx.fillStyle = COLORS.muted;
+    ctx.fillStyle = ARCADE_THEME.muted;
     ctx.font = '600 13px sans-serif';
     ctx.fillText('MINI ARCADE', side, top);
 
-    ctx.fillStyle = COLORS.text;
+    ctx.fillStyle = ARCADE_THEME.text;
     ctx.font = '800 36px sans-serif';
     ctx.fillText('今天玩点什么？', side, top + 48);
 
@@ -583,16 +704,17 @@ export default class Main {
         width: width - side * 2,
         height: 36,
       };
-      drawRoundedRect(ctx, side, top + 59, width - side * 2, 36, 14, '#202646');
-      ctx.fillStyle = '#FFD166';
+      drawRoundedRect(ctx, side, top + 63, width - side * 2, 36, 14, ARCADE_THEME.shadow);
+      drawRoundedRect(ctx, side, top + 59, width - side * 2, 36, 14, ARCADE_THEME.panel);
+      ctx.fillStyle = ARCADE_THEME.primary;
       ctx.font = '700 13px sans-serif';
       ctx.fillText(resumeInfo.title, side + 14, top + 82);
-      ctx.fillStyle = COLORS.subtext;
+      ctx.fillStyle = ARCADE_THEME.subtext;
       ctx.textAlign = 'right';
       ctx.fillText(`${resumeInfo.detail}  ›`, width - side - 14, top + 82);
       ctx.textAlign = 'left';
     } else {
-      ctx.fillStyle = COLORS.subtext;
+      ctx.fillStyle = ARCADE_THEME.subtext;
       ctx.font = '15px sans-serif';
       ctx.fillText('轻松开一局，随时再来一局。', side, top + 78);
     }
@@ -608,8 +730,10 @@ export default class Main {
     };
 
     const cardGradient = ctx.createLinearGradient(side, cardY, width - side, cardY + cardHeight);
-    cardGradient.addColorStop(0, '#7457FF');
-    cardGradient.addColorStop(1, '#A675FF');
+    cardGradient.addColorStop(0, '#5D3B82');
+    cardGradient.addColorStop(0.58, '#8454A1');
+    cardGradient.addColorStop(1, '#B66F9E');
+    drawRoundedRect(ctx, side, cardY + 7, cardWidth, cardHeight, 28, 'rgba(72,45,88,0.2)');
     drawRoundedRect(ctx, side, cardY, cardWidth, cardHeight, 28, cardGradient);
 
     ctx.globalAlpha = 0.15;
@@ -640,19 +764,19 @@ export default class Main {
     drawArrow(ctx, side + 112, cardY + cardHeight - 36, '#6547E8');
 
     const comingY = cardY + cardHeight + 30;
-    ctx.fillStyle = COLORS.text;
+    ctx.fillStyle = ARCADE_THEME.text;
     ctx.font = '700 18px sans-serif';
     ctx.fillText('更多游戏', side, comingY);
 
-    const gap = 12;
-    const smallWidth = (cardWidth - gap) / 2;
+    const gap = 10;
+    const smallWidth = (cardWidth - gap * 2) / 3;
     this.hitAreas.game2048Card = {
       x: side,
       y: comingY + 20,
       width: smallWidth,
       height: 116,
     };
-    this.drawComingCard(side, comingY + 20, smallWidth, 116, '2048', '滑动合成', '#FFB85C', true);
+    this.drawComingCard(side, comingY + 20, smallWidth, 116, '2048', '滑动合成', '#D79555', true);
     this.hitAreas.towerDefenseCard = {
       x: side + smallWidth + gap,
       y: comingY + 20,
@@ -666,11 +790,27 @@ export default class Main {
       116,
       '塔防',
       '第一关开放',
-      '#54D3A3',
+      '#4F927D',
+      true,
+    );
+    this.hitAreas.sudokuCard = {
+      x: side + (smallWidth + gap) * 2,
+      y: comingY + 20,
+      width: smallWidth,
+      height: 116,
+    };
+    this.drawComingCard(
+      side + (smallWidth + gap) * 2,
+      comingY + 20,
+      smallWidth,
+      116,
+      '数独',
+      '每日困难',
+      '#8D63B5',
       true,
     );
 
-    ctx.fillStyle = COLORS.muted;
+    ctx.fillStyle = ARCADE_THEME.muted;
     ctx.font = '12px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('小游戏合集 · 持续更新中', width / 2, SCREEN_HEIGHT - 30);
@@ -678,17 +818,19 @@ export default class Main {
   }
 
   drawComingCard(x, y, width, height, title, label, accent, playable = false) {
-    drawRoundedRect(ctx, x, y, width, height, 22, COLORS.panel);
+    drawRoundedRect(ctx, x, y + 5, width, height, 22, ARCADE_THEME.shadow);
+    drawRoundedRect(ctx, x, y, width, height, 22, ARCADE_THEME.panel);
     drawRoundedRect(ctx, x + 16, y + 16, 36, 36, 12, accent);
-    ctx.fillStyle = '#FFFFFF';
+    ctx.fillStyle = title === '2048' ? '#4C2F1B' : '#FFFFFF';
     ctx.font = '800 13px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(title === '2048' ? '2⁸' : '塔', x + 34, y + 39);
+    const icon = title === '2048' ? '2⁸' : title === '数独' ? '9×' : '塔';
+    ctx.fillText(icon, x + 34, y + 39);
     ctx.textAlign = 'left';
-    ctx.fillStyle = COLORS.text;
+    ctx.fillStyle = ARCADE_THEME.text;
     ctx.font = '700 17px sans-serif';
     ctx.fillText(title, x + 16, y + 78);
-    ctx.fillStyle = COLORS.muted;
+    ctx.fillStyle = ARCADE_THEME.muted;
     ctx.font = '12px sans-serif';
     ctx.fillText(label, x + 16, y + 99);
     if (playable) drawArrow(ctx, x + width - 22, y + 92, accent);
@@ -731,7 +873,7 @@ export default class Main {
     this.drawBackground();
     this.hitAreas = {};
     const width = SCREEN_WIDTH;
-    const top = Math.max(48, GameGlobal.safeArea.top + 18);
+    const top = this.getPageTop();
     this.drawBackButton(top, '冒险地图');
 
     ctx.fillStyle = COLORS.subtext;
@@ -875,7 +1017,7 @@ export default class Main {
   }
 
   getTowerBoardMetrics() {
-    const top = Math.max(48, GameGlobal.safeArea.top + 18);
+    const top = this.getPageTop();
     const x = 12;
     const y = top + 70;
     const width = SCREEN_WIDTH - 24;
@@ -902,7 +1044,7 @@ export default class Main {
   renderTowerDefense() {
     this.drawBackground();
     this.hitAreas = {};
-    const top = Math.max(48, GameGlobal.safeArea.top + 18);
+    const top = this.getPageTop();
     this.drawBackButton(top, TOWER_LEVEL.name);
 
     this.hitAreas.reset = { x: SCREEN_WIDTH - 94, y: top - 18, width: 76, height: 38 };
@@ -1819,16 +1961,17 @@ export default class Main {
   }
 
   render2048() {
-    this.drawBackground();
+    this.drawArcadeBackground();
     this.hitAreas = {};
 
     const width = SCREEN_WIDTH;
-    const top = Math.max(48, GameGlobal.safeArea.top + 18);
+    const top = this.getPageTop();
     const side = 18;
 
     this.hitAreas.back = { x: 14, y: top - 18, width: 48, height: 44 };
-    drawRoundedRect(ctx, 18, top - 14, 38, 38, 14, COLORS.panel);
-    ctx.strokeStyle = COLORS.text;
+    drawRoundedRect(ctx, 18, top - 10, 38, 38, 14, ARCADE_THEME.shadow);
+    drawRoundedRect(ctx, 18, top - 14, 38, 38, 14, ARCADE_THEME.panel);
+    ctx.strokeStyle = ARCADE_THEME.text;
     ctx.lineWidth = 2.2;
     ctx.beginPath();
     ctx.moveTo(41, top - 2);
@@ -1836,14 +1979,15 @@ export default class Main {
     ctx.lineTo(41, top + 12);
     ctx.stroke();
 
-    ctx.fillStyle = COLORS.text;
+    ctx.fillStyle = ARCADE_THEME.text;
     ctx.font = '800 23px sans-serif';
     ctx.fillText('2048', 70, top + 12);
 
     const resetWidth = 76;
     this.hitAreas.reset = { x: width - resetWidth - 18, y: top - 14, width: resetWidth, height: 38 };
-    drawRoundedRect(ctx, width - resetWidth - 18, top - 14, resetWidth, 38, 15, COLORS.panel);
-    ctx.fillStyle = COLORS.subtext;
+    drawRoundedRect(ctx, width - resetWidth - 18, top - 10, resetWidth, 38, 15, ARCADE_THEME.shadow);
+    drawRoundedRect(ctx, width - resetWidth - 18, top - 14, resetWidth, 38, 15, ARCADE_THEME.panelSoft);
+    ctx.fillStyle = ARCADE_THEME.primaryDark;
     ctx.font = '700 13px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('重新开局', width - resetWidth / 2 - 18, top + 10);
@@ -1852,14 +1996,14 @@ export default class Main {
     const statsY = top + 54;
     const statGap = 12;
     const statWidth = (width - side * 2 - statGap) / 2;
-    this.drawStat(side, statsY, statWidth, '当前分数', String(this.game2048.score), '#FFB85C');
-    this.drawStat(side + statWidth + statGap, statsY, statWidth, '最佳成绩', String(this.game2048.bestScore), '#62D9B0');
+    this.drawStat(side, statsY, statWidth, '当前分数', String(this.game2048.score), ARCADE_THEME.accent);
+    this.drawStat(side + statWidth + statGap, statsY, statWidth, '最佳成绩', String(this.game2048.bestScore), ARCADE_THEME.mint);
 
     const boardWidth = Math.min(width - side * 2, 396);
     const boardX = Math.round((width - boardWidth) / 2);
     const boardY = statsY + 116;
 
-    ctx.fillStyle = COLORS.subtext;
+    ctx.fillStyle = ARCADE_THEME.subtext;
     ctx.font = '13px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('滑动方块，让相同数字合并', width / 2, boardY - 24);
@@ -1867,7 +2011,7 @@ export default class Main {
 
     this.draw2048Board(boardX, boardY, boardWidth);
 
-    ctx.fillStyle = COLORS.muted;
+    ctx.fillStyle = ARCADE_THEME.muted;
     ctx.font = '12px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText(
@@ -1895,7 +2039,8 @@ export default class Main {
     const padding = 10;
     const gap = 8;
     const tileSize = (size - padding * 2 - gap * 3) / 4;
-    drawRoundedRect(ctx, x, y, size, size, 22, '#202646');
+    drawRoundedRect(ctx, x, y + 6, size, size, 22, ARCADE_THEME.shadow);
+    drawRoundedRect(ctx, x, y, size, size, 22, '#BDA9CE');
 
     for (let row = 0; row < 4; row++) {
       for (let col = 0; col < 4; col++) {
@@ -1949,26 +2094,27 @@ export default class Main {
 
   draw2048Tile(x, y, size, value) {
     const tileColors = {
-      0: '#30375B',
-      2: '#EEE4DA',
-      4: '#EDE0C8',
-      8: '#F2B179',
-      16: '#F59563',
-      32: '#F67C5F',
-      64: '#F65E3B',
-      128: '#EDCF72',
-      256: '#EDCC61',
-      512: '#EDC850',
-      1024: '#EDC53F',
-      2048: '#EDC22E',
+      0: '#E2D7EA',
+      2: '#FFF9FC',
+      4: '#F4E9F6',
+      8: '#E3C6EA',
+      16: '#D3A9DE',
+      32: '#C287CF',
+      64: '#A965BA',
+      128: '#E3B96F',
+      256: '#D89B58',
+      512: '#CE7D5E',
+      1024: '#B85E78',
+      2048: '#704394',
     };
-    const fill = tileColors[value] || '#7B63F4';
+    const fill = tileColors[value] || '#4E2B6C';
+    if (value) drawRoundedRect(ctx, x, y + Math.max(2, size * 0.045), size, size, Math.max(10, size * 0.14), 'rgba(77,48,92,0.18)');
     drawRoundedRect(ctx, x, y, size, size, Math.max(10, size * 0.14), fill);
     if (!value) return;
 
     const digits = String(value).length;
     const fontSize = Math.floor(size * (digits <= 2 ? 0.42 : digits === 3 ? 0.34 : 0.27));
-    ctx.fillStyle = value <= 4 ? '#776E65' : '#FFFFFF';
+    ctx.fillStyle = value <= 8 ? ARCADE_THEME.text : '#FFFFFF';
     ctx.font = `800 ${fontSize}px sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -1981,15 +2127,16 @@ export default class Main {
     const width = SCREEN_WIDTH;
     const height = SCREEN_HEIGHT;
     const won = this.game2048.status === 'won';
-    ctx.fillStyle = 'rgba(8, 11, 29, 0.74)';
+    ctx.fillStyle = 'rgba(55, 38, 65, 0.46)';
     ctx.fillRect(0, 0, width, height);
 
     const modalWidth = Math.min(width - 44, 330);
     const modalHeight = 250;
     const x = (width - modalWidth) / 2;
     const y = (height - modalHeight) / 2;
-    drawRoundedRect(ctx, x, y, modalWidth, modalHeight, 28, '#202646');
-    drawRoundedRect(ctx, width / 2 - 34, y + 26, 68, 68, 20, won ? '#EDC22E' : '#FF6688');
+    drawRoundedRect(ctx, x, y + 7, modalWidth, modalHeight, 28, ARCADE_THEME.shadow);
+    drawRoundedRect(ctx, x, y, modalWidth, modalHeight, 28, ARCADE_THEME.panel);
+    drawRoundedRect(ctx, width / 2 - 34, y + 26, 68, 68, 20, won ? ARCADE_THEME.gold : '#C85F7D');
 
     ctx.fillStyle = '#FFFFFF';
     ctx.font = won ? '800 18px sans-serif' : '800 25px sans-serif';
@@ -1998,32 +2145,35 @@ export default class Main {
     ctx.fillText(won ? '2048' : '×', width / 2, y + 60);
     ctx.textBaseline = 'alphabetic';
 
-    ctx.fillStyle = COLORS.text;
+    ctx.fillStyle = ARCADE_THEME.text;
     ctx.font = '800 26px sans-serif';
     ctx.fillText(won ? '挑战成功！' : '没有可移动方块', width / 2, y + 132);
-    ctx.fillStyle = COLORS.subtext;
+    ctx.fillStyle = ARCADE_THEME.subtext;
     ctx.font = '14px sans-serif';
     ctx.fillText(won ? `当前得分 ${this.game2048.score}` : `最终得分 ${this.game2048.score}`, width / 2, y + 158);
 
     this.hitAreas.overlayAction = { x: x + 24, y: y + 181, width: modalWidth - 48, height: 48 };
-    drawRoundedRect(ctx, x + 24, y + 181, modalWidth - 48, 48, 17, won ? '#EDC22E' : '#7457FF');
+    drawRoundedRect(ctx, x + 24, y + 185, modalWidth - 48, 48, 17, ARCADE_THEME.shadow);
+    drawRoundedRect(ctx, x + 24, y + 181, modalWidth - 48, 48, 17, won ? ARCADE_THEME.gold : ARCADE_THEME.primary);
     ctx.fillStyle = '#FFFFFF';
     ctx.font = '700 15px sans-serif';
     ctx.fillText(won ? '继续挑战' : '再来一局', width / 2, y + 211);
     ctx.textAlign = 'left';
   }
 
-  renderMinesweeper() {
-    this.drawBackground();
+  renderSudoku() {
+    this.drawArcadeBackground();
     this.hitAreas = {};
+    this.sudoku.ensureDaily();
 
     const width = SCREEN_WIDTH;
-    const top = Math.max(48, GameGlobal.safeArea.top + 18);
-    const side = 18;
+    const top = this.getPageTop();
+    const side = 16;
 
     this.hitAreas.back = { x: 14, y: top - 18, width: 48, height: 44 };
-    drawRoundedRect(ctx, 18, top - 14, 38, 38, 14, COLORS.panel);
-    ctx.strokeStyle = COLORS.text;
+    drawRoundedRect(ctx, 18, top - 10, 38, 38, 14, ARCADE_THEME.shadow);
+    drawRoundedRect(ctx, 18, top - 14, 38, 38, 14, ARCADE_THEME.panel);
+    ctx.strokeStyle = ARCADE_THEME.text;
     ctx.lineWidth = 2.2;
     ctx.beginPath();
     ctx.moveTo(41, top - 2);
@@ -2031,7 +2181,259 @@ export default class Main {
     ctx.lineTo(41, top + 12);
     ctx.stroke();
 
-    ctx.fillStyle = COLORS.text;
+    ctx.fillStyle = ARCADE_THEME.text;
+    ctx.font = '800 23px sans-serif';
+    ctx.fillText('每日数独', 70, top + 12);
+
+    const resetWidth = 76;
+    const resetX = width - resetWidth - 18;
+    this.hitAreas.reset = { x: resetX, y: top - 14, width: resetWidth, height: 38 };
+    drawRoundedRect(ctx, resetX, top - 10, resetWidth, 38, 15, ARCADE_THEME.shadow);
+    drawRoundedRect(ctx, resetX, top - 14, resetWidth, 38, 15, ARCADE_THEME.panelSoft);
+    ctx.fillStyle = ARCADE_THEME.primaryDark;
+    ctx.font = '700 13px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('重开今日', resetX + resetWidth / 2, top + 10);
+
+    const infoY = top + 42;
+    drawRoundedRect(ctx, side, infoY + 4, width - side * 2, 50, 17, ARCADE_THEME.shadow);
+    drawRoundedRect(ctx, side, infoY, width - side * 2, 50, 17, ARCADE_THEME.panel);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = ARCADE_THEME.primaryDark;
+    ctx.font = '800 14px sans-serif';
+    ctx.fillText(`${this.formatSudokuDate()} · 困难`, side + 15, infoY + 21);
+    ctx.fillStyle = ARCADE_THEME.muted;
+    ctx.font = '12px sans-serif';
+    ctx.fillText(`${this.sudoku.clueCount} 个提示 · 每日唯一题目`, side + 15, infoY + 40);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = ARCADE_THEME.subtext;
+    ctx.font = '700 13px sans-serif';
+    ctx.fillText(this.formatSudokuTime(), width - side - 15, infoY + 22);
+    ctx.fillStyle = this.sudoku.mistakes ? '#B64F75' : ARCADE_THEME.muted;
+    ctx.font = '12px sans-serif';
+    ctx.fillText(`错误 ${this.sudoku.mistakes}`, width - side - 15, infoY + 40);
+    ctx.textAlign = 'left';
+
+    const boardY = infoY + 66;
+    const availableHeight = SCREEN_HEIGHT - boardY - 154;
+    const boardSize = Math.min(width - side * 2, 378, Math.max(252, availableHeight));
+    const boardX = Math.round((width - boardSize) / 2);
+    this.drawSudokuBoard(boardX, boardY, boardSize);
+
+    const keypadY = boardY + boardSize + 16;
+    const keypadGap = 4;
+    const keySize = (boardSize - keypadGap * 8) / 9;
+    for (let value = 1; value <= 9; value++) {
+      const keyX = boardX + (value - 1) * (keySize + keypadGap);
+      this.hitAreas[`sudokuNumber_${value}`] = {
+        x: keyX,
+        y: keypadY,
+        width: keySize,
+        height: 42,
+      };
+      const completed = this.sudoku.grid.reduce((count, row) => (
+        count + row.filter((cell) => cell === value).length
+      ), 0) >= 9;
+      drawRoundedRect(ctx, keyX, keypadY + 3, keySize, 42, 12, ARCADE_THEME.shadow);
+      drawRoundedRect(
+        ctx,
+        keyX,
+        keypadY,
+        keySize,
+        42,
+        12,
+        completed ? ARCADE_THEME.panelSoft : ARCADE_THEME.panel,
+      );
+      ctx.fillStyle = completed ? ARCADE_THEME.muted : ARCADE_THEME.primaryDark;
+      ctx.font = '800 18px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(String(value), keyX + keySize / 2, keypadY + 27);
+    }
+
+    const toolY = keypadY + 52;
+    const toolGap = 10;
+    const toolWidth = (boardSize - toolGap) / 2;
+    this.hitAreas.sudokuNotes = { x: boardX, y: toolY, width: toolWidth, height: 40 };
+    this.hitAreas.sudokuErase = {
+      x: boardX + toolWidth + toolGap,
+      y: toolY,
+      width: toolWidth,
+      height: 40,
+    };
+    drawRoundedRect(ctx, boardX, toolY + 3, toolWidth, 40, 14, ARCADE_THEME.shadow);
+    drawRoundedRect(
+      ctx,
+      boardX,
+      toolY,
+      toolWidth,
+      40,
+      14,
+      this.sudoku.notesMode ? ARCADE_THEME.primary : ARCADE_THEME.panelSoft,
+    );
+    drawRoundedRect(
+      ctx,
+      boardX + toolWidth + toolGap,
+      toolY + 3,
+      toolWidth,
+      40,
+      14,
+      ARCADE_THEME.shadow,
+    );
+    drawRoundedRect(
+      ctx,
+      boardX + toolWidth + toolGap,
+      toolY,
+      toolWidth,
+      40,
+      14,
+      ARCADE_THEME.panelSoft,
+    );
+    ctx.fillStyle = this.sudoku.notesMode ? '#FFFFFF' : ARCADE_THEME.primaryDark;
+    ctx.font = '700 13px sans-serif';
+    ctx.fillText(this.sudoku.notesMode ? '候选数 · 开' : '候选数 · 关', boardX + toolWidth / 2, toolY + 25);
+    ctx.fillStyle = ARCADE_THEME.primaryDark;
+    ctx.fillText('擦除', boardX + toolWidth + toolGap + toolWidth / 2, toolY + 25);
+    ctx.textAlign = 'left';
+
+    if (this.showSudokuResult) this.drawSudokuResultOverlay();
+  }
+
+  drawSudokuBoard(x, y, size) {
+    const cellSize = size / 9;
+    const selected = this.sudoku.selected;
+    const selectedValue = selected ? this.sudoku.grid[selected.row][selected.col] : 0;
+    this.hitAreas.sudokuBoard = { x, y, width: size, height: size };
+
+    drawRoundedRect(ctx, x, y + 5, size, size, 10, ARCADE_THEME.shadow);
+    ctx.fillStyle = '#FFFDFE';
+    ctx.fillRect(x, y, size, size);
+
+    for (let row = 0; row < 9; row++) {
+      for (let col = 0; col < 9; col++) {
+        const cellX = x + col * cellSize;
+        const cellY = y + row * cellSize;
+        const value = this.sudoku.grid[row][col];
+        const isSelected = selected && selected.row === row && selected.col === col;
+        const isRelated = selected && (
+          selected.row === row
+          || selected.col === col
+          || (Math.floor(selected.row / 3) === Math.floor(row / 3)
+            && Math.floor(selected.col / 3) === Math.floor(col / 3))
+        );
+        const isSame = selectedValue && value === selectedValue;
+
+        if (isSelected) ctx.fillStyle = '#CDADE4';
+        else if (isSame) ctx.fillStyle = '#E1CFF0';
+        else if (isRelated) ctx.fillStyle = '#F2EAF7';
+        else ctx.fillStyle = '#FFFDFE';
+        ctx.fillRect(cellX, cellY, cellSize, cellSize);
+
+        if (value) {
+          const fixed = this.sudoku.puzzle[row][col] !== 0;
+          const wrong = !fixed && value !== this.sudoku.solution[row][col];
+          ctx.fillStyle = wrong ? '#C14F6E' : fixed ? ARCADE_THEME.text : ARCADE_THEME.primary;
+          ctx.font = `${fixed ? '800' : '700'} ${Math.max(17, cellSize * 0.52)}px sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(String(value), cellX + cellSize / 2, cellY + cellSize / 2 + 1);
+        } else if (this.sudoku.notes[row][col]) {
+          ctx.fillStyle = ARCADE_THEME.muted;
+          ctx.font = `${Math.max(7, cellSize * 0.2)}px sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          for (let note = 1; note <= 9; note++) {
+            if (!(this.sudoku.notes[row][col] & (1 << (note - 1)))) continue;
+            const noteCol = (note - 1) % 3;
+            const noteRow = Math.floor((note - 1) / 3);
+            ctx.fillText(
+              String(note),
+              cellX + cellSize * (noteCol + 0.5) / 3,
+              cellY + cellSize * (noteRow + 0.5) / 3,
+            );
+          }
+        }
+      }
+    }
+
+    for (let index = 0; index <= 9; index++) {
+      const thick = index % 3 === 0;
+      ctx.strokeStyle = thick ? ARCADE_THEME.primaryDark : ARCADE_THEME.border;
+      ctx.lineWidth = thick ? 2.2 : 0.8;
+      const offset = index * cellSize;
+      ctx.beginPath();
+      ctx.moveTo(x + offset, y);
+      ctx.lineTo(x + offset, y + size);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x, y + offset);
+      ctx.lineTo(x + size, y + offset);
+      ctx.stroke();
+    }
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  drawSudokuResultOverlay() {
+    ctx.fillStyle = 'rgba(56,42,67,0.34)';
+    ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+    const width = Math.min(SCREEN_WIDTH - 48, 330);
+    const height = 240;
+    const x = (SCREEN_WIDTH - width) / 2;
+    const y = (SCREEN_HEIGHT - height) / 2;
+    drawRoundedRect(ctx, x, y + 7, width, height, 28, ARCADE_THEME.shadow);
+    drawRoundedRect(ctx, x, y, width, height, 28, ARCADE_THEME.panel);
+    drawRoundedRect(ctx, SCREEN_WIDTH / 2 - 31, y + 27, 62, 62, 20, ARCADE_THEME.gold);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = '800 20px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('✓', SCREEN_WIDTH / 2, y + 66);
+    ctx.fillStyle = ARCADE_THEME.text;
+    ctx.font = '800 25px sans-serif';
+    ctx.fillText('今日挑战完成', SCREEN_WIDTH / 2, y + 122);
+    ctx.fillStyle = ARCADE_THEME.subtext;
+    ctx.font = '13px sans-serif';
+    ctx.fillText(`${this.formatSudokuTime()} · ${this.sudoku.mistakes} 次错误`, SCREEN_WIDTH / 2, y + 149);
+    this.hitAreas.sudokuOverlayAction = { x: x + 22, y: y + 174, width: width - 44, height: 44 };
+    drawRoundedRect(ctx, x + 22, y + 178, width - 44, 44, 16, ARCADE_THEME.shadow);
+    drawRoundedRect(ctx, x + 22, y + 174, width - 44, 44, 16, ARCADE_THEME.primary);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = '700 14px sans-serif';
+    ctx.fillText('查看完成棋盘', SCREEN_WIDTH / 2, y + 201);
+    ctx.textAlign = 'left';
+  }
+
+  formatSudokuDate() {
+    const parts = this.sudoku.dateKey.split('-').map(Number);
+    return `${parts[1]}月${parts[2]}日`;
+  }
+
+  formatSudokuTime() {
+    const totalSeconds = Math.floor(this.sudoku.elapsedMilliseconds / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = String(totalSeconds % 60).padStart(2, '0');
+    return `${minutes}:${seconds}`;
+  }
+
+  renderMinesweeper() {
+    this.drawArcadeBackground();
+    this.hitAreas = {};
+
+    const width = SCREEN_WIDTH;
+    const top = this.getPageTop();
+    const side = 18;
+
+    this.hitAreas.back = { x: 14, y: top - 18, width: 48, height: 44 };
+    drawRoundedRect(ctx, 18, top - 10, 38, 38, 14, ARCADE_THEME.shadow);
+    drawRoundedRect(ctx, 18, top - 14, 38, 38, 14, ARCADE_THEME.panel);
+    ctx.strokeStyle = ARCADE_THEME.text;
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.moveTo(41, top - 2);
+    ctx.lineTo(32, top + 5);
+    ctx.lineTo(41, top + 12);
+    ctx.stroke();
+
+    ctx.fillStyle = ARCADE_THEME.text;
     ctx.font = '800 23px sans-serif';
     ctx.fillText('扫雷', 70, top + 12);
 
@@ -2043,8 +2445,9 @@ export default class Main {
       width: leaderboardWidth + 16,
       height: 46,
     };
-    drawRoundedRect(ctx, leaderboardX, top - 14, leaderboardWidth, 38, 14, COLORS.panel);
-    ctx.fillStyle = '#FFD166';
+    drawRoundedRect(ctx, leaderboardX, top - 10, leaderboardWidth, 38, 14, ARCADE_THEME.shadow);
+    drawRoundedRect(ctx, leaderboardX, top - 14, leaderboardWidth, 38, 14, ARCADE_THEME.primary);
+    ctx.fillStyle = '#FFFFFF';
     ctx.font = '700 13px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('排行榜', leaderboardX + leaderboardWidth / 2, top + 10);
@@ -2061,15 +2464,25 @@ export default class Main {
     this.drawDifficultySelector(side, difficultyY, difficultyWidth, 38);
 
     this.hitAreas.zoom = { x: zoomX, y: difficultyY, width: zoomWidth, height: 38 };
-    drawRoundedRect(ctx, zoomX, difficultyY, zoomWidth, 38, 15, COLORS.panel);
-    ctx.fillStyle = this.mineViewport.zoomed ? '#FFD166' : COLORS.subtext;
+    drawRoundedRect(ctx, zoomX, difficultyY + 3, zoomWidth, 38, 15, ARCADE_THEME.shadow);
+    drawRoundedRect(
+      ctx,
+      zoomX,
+      difficultyY,
+      zoomWidth,
+      38,
+      15,
+      this.mineViewport.zoomed ? ARCADE_THEME.accent : ARCADE_THEME.panelSoft,
+    );
+    ctx.fillStyle = this.mineViewport.zoomed ? '#FFFFFF' : ARCADE_THEME.primaryDark;
     ctx.font = '700 13px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText(this.mineViewport.zoomed ? '缩小' : '放大', zoomX + zoomWidth / 2, difficultyY + 24);
 
     this.hitAreas.reset = { x: resetX, y: difficultyY, width: resetWidth, height: 38 };
-    drawRoundedRect(ctx, resetX, difficultyY, resetWidth, 38, 15, COLORS.panel);
-    ctx.fillStyle = COLORS.subtext;
+    drawRoundedRect(ctx, resetX, difficultyY + 3, resetWidth, 38, 15, ARCADE_THEME.shadow);
+    drawRoundedRect(ctx, resetX, difficultyY, resetWidth, 38, 15, ARCADE_THEME.panelSoft);
+    ctx.fillStyle = ARCADE_THEME.primaryDark;
     ctx.font = '700 13px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('重开', resetX + resetWidth / 2, difficultyY + 24);
@@ -2078,9 +2491,9 @@ export default class Main {
     const statsY = difficultyY + 48;
     const statGap = 10;
     const statWidth = (width - side * 2 - statGap * 2) / 3;
-    this.drawStat(side, statsY, statWidth, '剩余雷区', String(this.minesweeper.minesLeft), '#FF6F91');
-    this.drawStat(side + statWidth + statGap, statsY, statWidth, '用时', this.formatTime(), '#FFD166');
-    this.drawStat(side + (statWidth + statGap) * 2, statsY, statWidth, '最佳', this.formatBest(), '#62D9B0');
+    this.drawStat(side, statsY, statWidth, '剩余雷区', String(this.minesweeper.minesLeft), '#B64F75');
+    this.drawStat(side + statWidth + statGap, statsY, statWidth, '用时', this.formatTime(), ARCADE_THEME.gold);
+    this.drawStat(side + (statWidth + statGap) * 2, statsY, statWidth, '最佳', this.formatBest(), ARCADE_THEME.mint);
 
     const boardTop = statsY + 78;
     const boardWidth = Math.min(width - side * 2, 396);
@@ -2108,7 +2521,8 @@ export default class Main {
       maxOffsetY,
     };
 
-    drawRoundedRect(ctx, boardX - 5, boardY - 5, boardWidth + 10, boardWidth + 10, 18, '#161B39');
+    drawRoundedRect(ctx, boardX - 5, boardY, boardWidth + 10, boardWidth + 10, 18, ARCADE_THEME.shadow);
+    drawRoundedRect(ctx, boardX - 5, boardY - 5, boardWidth + 10, boardWidth + 10, 18, '#BDA8CD');
     ctx.save();
     ctx.beginPath();
     ctx.rect(boardX, boardY, boardWidth, boardWidth);
@@ -2127,11 +2541,11 @@ export default class Main {
     this.drawMineNavigation(boardX, boardY, boardWidth, maxOffsetX, maxOffsetY);
 
     const tipY = boardY + boardWidth + 28;
-    ctx.fillStyle = COLORS.subtext;
+    ctx.fillStyle = ARCADE_THEME.subtext;
     ctx.font = '13px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('轻触翻开 · 长按切换旗子 / 问号', width / 2, tipY);
-    ctx.fillStyle = COLORS.muted;
+    ctx.fillStyle = ARCADE_THEME.muted;
     ctx.font = '12px sans-serif';
     ctx.fillText('按住空白已开格拖动棋盘 · 点击数字快速展开', width / 2, tipY + 24);
     ctx.textAlign = 'left';
@@ -2165,7 +2579,8 @@ export default class Main {
 
     ctx.save();
     ctx.globalAlpha = 0.94;
-    drawRoundedRect(ctx, x, y, size, size, 14, '#11162F');
+    drawRoundedRect(ctx, x, y + 3, size, size, 14, ARCADE_THEME.shadow);
+    drawRoundedRect(ctx, x, y, size, size, 14, ARCADE_THEME.primaryDark);
     ctx.restore();
 
     const centerX = x + size / 2;
@@ -2194,8 +2609,9 @@ export default class Main {
   }
 
   drawStat(x, y, width, label, value, accent) {
-    drawRoundedRect(ctx, x, y, width, 70, 18, COLORS.panel);
-    ctx.fillStyle = COLORS.muted;
+    drawRoundedRect(ctx, x, y + 4, width, 70, 18, ARCADE_THEME.shadow);
+    drawRoundedRect(ctx, x, y, width, 70, 18, ARCADE_THEME.panel);
+    ctx.fillStyle = ARCADE_THEME.muted;
     ctx.font = '12px sans-serif';
     ctx.fillText(label, x + 13, y + 22);
     ctx.fillStyle = accent;
@@ -2206,7 +2622,8 @@ export default class Main {
   drawDifficultySelector(x, y, width, height) {
     const difficultyKeys = Object.keys(DIFFICULTIES);
     const segmentWidth = width / difficultyKeys.length;
-    drawRoundedRect(ctx, x, y, width, height, 15, '#202646');
+    drawRoundedRect(ctx, x, y + 3, width, height, 15, ARCADE_THEME.shadow);
+    drawRoundedRect(ctx, x, y, width, height, 15, ARCADE_THEME.panelSoft);
 
     difficultyKeys.forEach((key, index) => {
       const segmentX = x + index * segmentWidth;
@@ -2219,10 +2636,10 @@ export default class Main {
       };
 
       if (selected) {
-        drawRoundedRect(ctx, segmentX + 3, y + 3, segmentWidth - 6, height - 6, 12, '#7457FF');
+        drawRoundedRect(ctx, segmentX + 3, y + 3, segmentWidth - 6, height - 6, 12, ARCADE_THEME.primary);
       }
 
-      ctx.fillStyle = selected ? '#FFFFFF' : COLORS.subtext;
+      ctx.fillStyle = selected ? '#FFFFFF' : ARCADE_THEME.subtext;
       ctx.font = `${selected ? '700' : '600'} 13px sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -2233,7 +2650,7 @@ export default class Main {
   }
 
   drawBoard(boardX, boardY, cellSize) {
-    const colors = ['#8A93A8', '#6C8CFF', '#47C9A2', '#FFB84D', '#F26D86', '#A980FF', '#4FC3E8', '#F18ED0', '#FFFFFF'];
+    const colors = ['#776982', '#4867B2', '#3F806C', '#B87032', '#B84D70', '#7651A3', '#397A8D', '#9D4B86', '#403547'];
     const gap = Math.max(2, Math.floor(cellSize * 0.08));
     const radius = Math.max(5, Math.floor(cellSize * 0.18));
 
@@ -2245,9 +2662,9 @@ export default class Main {
         const size = cellSize - gap;
 
         if (cell.revealed) {
-          drawRoundedRect(ctx, x, y, size, size, radius, cell.mine ? '#FF6688' : '#242A4C');
+          drawRoundedRect(ctx, x, y, size, size, radius, cell.mine ? '#C85F7D' : '#F8F2FA');
           if (cell.mine) {
-            drawMine(ctx, x + size / 2, y + size / 2, size * 0.25, '#FFFFFF', '#FF6688');
+            drawMine(ctx, x + size / 2, y + size / 2, size * 0.25, '#FFFFFF', '#923C5A');
           } else if (cell.adjacent > 0) {
             ctx.fillStyle = colors[cell.adjacent];
             ctx.font = `800 ${Math.floor(cellSize * 0.48)}px sans-serif`;
@@ -2260,8 +2677,8 @@ export default class Main {
         } else {
           const isPressed = this.pressedCells[`${row}:${col}`];
           const fill = ctx.createLinearGradient(x, y, x + size, y + size);
-          fill.addColorStop(0, isPressed ? '#9B8AF8' : '#7B63F4');
-          fill.addColorStop(1, isPressed ? '#8068E8' : '#6548D7');
+          fill.addColorStop(0, isPressed ? '#B98BCB' : '#9E73BD');
+          fill.addColorStop(1, isPressed ? '#9162AE' : '#71478F');
           drawRoundedRect(ctx, x, y, size, size, radius, fill);
           if (cell.flagged) this.drawFlag(x, y, size);
           else if (cell.questioned) this.drawQuestion(x, y, size);
@@ -2302,10 +2719,10 @@ export default class Main {
           coverSize,
           coverSize,
           Math.max(4, coverSize * 0.18),
-          '#8D76F7',
+          '#9368B4',
         );
         ctx.restore();
-        this.drawMineEffectRing(centerX, centerY, cellSize, progress, '#B6A8FF');
+        this.drawMineEffectRing(centerX, centerY, cellSize, progress, '#7650A8');
       } else if (animation.type === 'mine') {
         this.drawMineEffectRing(centerX, centerY, cellSize, progress, '#FF6688', 1.4);
         this.drawMineEffectRing(centerX, centerY, cellSize, Math.max(0, progress - 0.18), '#FFD166');
@@ -2381,16 +2798,16 @@ export default class Main {
     const panelY = Math.max(safeTop, touchY - panelHeight - 34);
     const gridX = panelX + 14;
     const gridY = panelY + 42;
-    const colors = ['#8A93A8', '#6C8CFF', '#47C9A2', '#FFB84D', '#F26D86', '#A980FF', '#4FC3E8', '#F18ED0', '#FFFFFF'];
+    const colors = ['#776982', '#4867B2', '#3F806C', '#B87032', '#B84D70', '#7651A3', '#397A8D', '#9D4B86', '#403547'];
 
     ctx.save();
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.35)';
+    ctx.shadowColor = 'rgba(72, 45, 88, 0.24)';
     ctx.shadowBlur = 18;
     ctx.shadowOffsetY = 8;
-    drawRoundedRect(ctx, panelX, panelY, panelWidth, panelHeight, 22, '#292F55');
+    drawRoundedRect(ctx, panelX, panelY, panelWidth, panelHeight, 22, ARCADE_THEME.panel);
     ctx.restore();
 
-    ctx.fillStyle = '#D9DDF0';
+    ctx.fillStyle = ARCADE_THEME.subtext;
     ctx.font = '700 12px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText(
@@ -2410,15 +2827,15 @@ export default class Main {
         const isTarget = rowOffset === 0 && colOffset === 0;
 
         if (row < 0 || row >= this.minesweeper.rows || col < 0 || col >= this.minesweeper.cols) {
-          drawRoundedRect(ctx, x, y, size, size, 8, '#171B36');
+          drawRoundedRect(ctx, x, y, size, size, 8, '#C7B5D4');
           continue;
         }
 
         const cell = this.minesweeper.board[row][col];
         if (cell.revealed) {
-          drawRoundedRect(ctx, x, y, size, size, 8, cell.mine ? '#FF6688' : '#202646');
+          drawRoundedRect(ctx, x, y, size, size, 8, cell.mine ? '#C85F7D' : '#F8F2FA');
           if (cell.mine) {
-            drawMine(ctx, x + size / 2, y + size / 2, size * 0.23, '#FFFFFF', '#FF6688');
+            drawMine(ctx, x + size / 2, y + size / 2, size * 0.23, '#FFFFFF', '#923C5A');
           } else if (cell.adjacent > 0) {
             ctx.fillStyle = colors[cell.adjacent];
             ctx.font = '800 21px sans-serif';
@@ -2430,15 +2847,15 @@ export default class Main {
           }
         } else {
           const fill = ctx.createLinearGradient(x, y, x + size, y + size);
-          fill.addColorStop(0, '#8D76F7');
-          fill.addColorStop(1, '#6C52DD');
+          fill.addColorStop(0, '#9E73BD');
+          fill.addColorStop(1, '#71478F');
           drawRoundedRect(ctx, x, y, size, size, 8, fill);
           if (cell.flagged) this.drawFlag(x, y, size);
           else if (cell.questioned) this.drawQuestion(x, y, size);
         }
 
         if (isTarget) {
-          ctx.strokeStyle = '#FFD166';
+          ctx.strokeStyle = '#C17A2F';
           ctx.lineWidth = 3;
           ctx.strokeRect(x - 1, y - 1, size + 2, size + 2);
         }
@@ -2449,35 +2866,37 @@ export default class Main {
   drawResultOverlay() {
     const width = SCREEN_WIDTH;
     const height = SCREEN_HEIGHT;
-    ctx.fillStyle = 'rgba(8, 11, 29, 0.72)';
+    ctx.fillStyle = 'rgba(55, 38, 65, 0.46)';
     ctx.fillRect(0, 0, width, height);
 
     const modalWidth = Math.min(width - 44, 330);
     const modalHeight = 250;
     const x = (width - modalWidth) / 2;
     const y = (height - modalHeight) / 2;
-    drawRoundedRect(ctx, x, y, modalWidth, modalHeight, 28, '#202646');
+    drawRoundedRect(ctx, x, y + 7, modalWidth, modalHeight, 28, ARCADE_THEME.shadow);
+    drawRoundedRect(ctx, x, y, modalWidth, modalHeight, 28, ARCADE_THEME.panel);
 
     const won = this.minesweeper.status === 'won';
-    drawRoundedRect(ctx, width / 2 - 29, y + 28, 58, 58, 20, won ? '#3FC89D' : '#FF6688');
+    drawRoundedRect(ctx, width / 2 - 29, y + 28, 58, 58, 20, won ? ARCADE_THEME.mint : '#C85F7D');
     if (won) {
       drawSpark(ctx, width / 2, y + 57, 17, '#FFFFFF');
     } else {
-      drawMine(ctx, width / 2, y + 57, 17, '#FFFFFF', '#FF6688');
+      drawMine(ctx, width / 2, y + 57, 17, '#FFFFFF', '#923C5A');
     }
 
     ctx.textAlign = 'center';
-    ctx.fillStyle = COLORS.text;
+    ctx.fillStyle = ARCADE_THEME.text;
     ctx.font = '800 26px sans-serif';
     ctx.fillText(won ? '排雷成功！' : '踩到雷啦', width / 2, y + 126);
-    ctx.fillStyle = COLORS.subtext;
+    ctx.fillStyle = ARCADE_THEME.subtext;
     ctx.font = '14px sans-serif';
     const rankText = this.minesweeper.lastRank ? ` · 排行第 ${this.minesweeper.lastRank}` : '';
     const subtitle = won ? `本局用时 ${this.formatTime()}${rankText}` : '别灰心，换个思路再试一次';
     fitText(ctx, subtitle, width / 2, y + 154, modalWidth - 40);
 
     this.hitAreas.overlayAction = { x: x + 24, y: y + 181, width: modalWidth - 48, height: 48 };
-    drawRoundedRect(ctx, x + 24, y + 181, modalWidth - 48, 48, 17, '#7457FF');
+    drawRoundedRect(ctx, x + 24, y + 185, modalWidth - 48, 48, 17, ARCADE_THEME.shadow);
+    drawRoundedRect(ctx, x + 24, y + 181, modalWidth - 48, 48, 17, ARCADE_THEME.primary);
     ctx.fillStyle = '#FFFFFF';
     ctx.font = '700 15px sans-serif';
     ctx.fillText('再来一局', width / 2, y + 211);
@@ -2487,20 +2906,21 @@ export default class Main {
   drawMineLeaderboard() {
     const width = SCREEN_WIDTH;
     const height = SCREEN_HEIGHT;
-    ctx.fillStyle = 'rgba(8, 11, 29, 0.82)';
+    ctx.fillStyle = 'rgba(55, 38, 65, 0.5)';
     ctx.fillRect(0, 0, width, height);
 
     const modalWidth = Math.min(width - 36, 350);
     const modalHeight = Math.min(430, height - 64);
     const x = (width - modalWidth) / 2;
     const y = (height - modalHeight) / 2;
-    drawRoundedRect(ctx, x, y, modalWidth, modalHeight, 26, '#202646');
+    drawRoundedRect(ctx, x, y + 7, modalWidth, modalHeight, 26, ARCADE_THEME.shadow);
+    drawRoundedRect(ctx, x, y, modalWidth, modalHeight, 26, ARCADE_THEME.panel);
 
-    ctx.fillStyle = COLORS.text;
+    ctx.fillStyle = ARCADE_THEME.text;
     ctx.font = '800 24px sans-serif';
     ctx.textAlign = 'left';
     ctx.fillText('扫雷排行榜', x + 24, y + 39);
-    ctx.fillStyle = COLORS.subtext;
+    ctx.fillStyle = ARCADE_THEME.subtext;
     ctx.font = '13px sans-serif';
     ctx.fillText(`${DIFFICULTIES[this.minesweeper.difficulty].label} · 每次通关都会上榜`, x + 24, y + 63);
 
@@ -2508,8 +2928,8 @@ export default class Main {
     const closeX = x + modalWidth - closeSize - 16;
     const closeY = y + 16;
     this.hitAreas.leaderboardClose = { x: closeX, y: closeY, width: closeSize, height: closeSize };
-    drawRoundedRect(ctx, closeX, closeY, closeSize, closeSize, 12, '#303758');
-    ctx.strokeStyle = COLORS.subtext;
+    drawRoundedRect(ctx, closeX, closeY, closeSize, closeSize, 12, ARCADE_THEME.panelSoft);
+    ctx.strokeStyle = ARCADE_THEME.primaryDark;
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(closeX + 12, closeY + 12);
@@ -2522,7 +2942,7 @@ export default class Main {
     const listTop = y + 84;
     const rowHeight = 38;
     if (!records.length) {
-      ctx.fillStyle = COLORS.muted;
+      ctx.fillStyle = ARCADE_THEME.muted;
       ctx.font = '14px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('完成一局后，这里会记录你的成绩', width / 2, listTop + 75);
@@ -2530,29 +2950,29 @@ export default class Main {
       records.forEach((record, index) => {
         const rowY = listTop + index * rowHeight;
         if (index < 3) {
-          drawRoundedRect(ctx, x + 18, rowY, modalWidth - 36, rowHeight - 4, 11, 'rgba(116,87,255,0.2)');
+          drawRoundedRect(ctx, x + 18, rowY, modalWidth - 36, rowHeight - 4, 11, 'rgba(118,80,168,0.12)');
         }
         ctx.textBaseline = 'middle';
         ctx.textAlign = 'center';
-        ctx.fillStyle = index === 0 ? '#FFD166' : COLORS.subtext;
+        ctx.fillStyle = index === 0 ? ARCADE_THEME.gold : ARCADE_THEME.subtext;
         ctx.font = '800 14px sans-serif';
         ctx.fillText(String(index + 1), x + 38, rowY + 17);
         ctx.textAlign = 'left';
-        ctx.fillStyle = COLORS.text;
+        ctx.fillStyle = ARCADE_THEME.text;
         ctx.font = '600 13px sans-serif';
         ctx.fillText(record.playerName, x + 58, rowY + 17);
-        ctx.fillStyle = COLORS.muted;
+        ctx.fillStyle = ARCADE_THEME.muted;
         ctx.font = '11px sans-serif';
         ctx.fillText(this.formatLeaderboardDate(record.createdAt), x + 126, rowY + 17);
         ctx.textAlign = 'right';
-        ctx.fillStyle = '#62D9B0';
+        ctx.fillStyle = ARCADE_THEME.mint;
         ctx.font = '700 13px sans-serif';
         ctx.fillText(this.formatDuration(record.time), x + modalWidth - 24, rowY + 17);
       });
     }
     ctx.textBaseline = 'alphabetic';
     ctx.textAlign = 'center';
-    ctx.fillStyle = COLORS.muted;
+    ctx.fillStyle = ARCADE_THEME.muted;
     ctx.font = '11px sans-serif';
     ctx.fillText('本地保存前 50 次最佳通关记录', width / 2, y + modalHeight - 22);
     ctx.textAlign = 'left';
@@ -2587,12 +3007,14 @@ export default class Main {
     if (this.screen === 'home') this.renderHome();
     else if (this.screen === 'minesweeper') this.renderMinesweeper();
     else if (this.screen === '2048') this.render2048();
+    else if (this.screen === 'sudoku') this.renderSudoku();
     else if (this.screen === 'towerMap') this.renderTowerMap();
     else this.renderTowerDefense();
   }
 
   loop() {
     if (this.screen === 'minesweeper') this.minesweeper.updateTimer();
+    if (this.screen === 'sudoku') this.sudoku.updateTimer();
     if (this.screen === 'towerDefense') this.towerDefense.update();
     if (!['home', 'towerMap'].includes(this.screen) && Date.now() - this.lastAutoSaveAt >= 2000) {
       this.saveCurrentGame();
